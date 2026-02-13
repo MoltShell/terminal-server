@@ -79,6 +79,8 @@ On GCP VMs, the server runs as a systemd service with `Restart=always`.
 
 ## Deployment
 
+**Push to `main` triggers CI/CD automatically** — no manual deploy steps needed. Just commit and push.
+
 ### GCS Release Pipeline (primary)
 ```bash
 npm run deploy       # ./scripts/deploy-to-gcs.sh
@@ -86,7 +88,7 @@ npm run deploy       # ./scripts/deploy-to-gcs.sh
 
 This creates a tarball of `server/` + `package.json` + `package-lock.json`, computes a SHA256 version hash, and uploads both to `gs://moltshell-releases/`.
 
-**CI/CD**: GitHub Actions deploys on push to `main`. PRs get typecheck only (no deploy).
+**CI/CD**: GitHub Actions runs typecheck + deploy to GCS on push to `main`. PRs get typecheck only (no deploy).
 
 **How VMs pick up updates**:
 1. On first boot: startup script runs `pull-app.sh` to download from GCS
@@ -126,6 +128,7 @@ Connection URL: `/ws/terminal?session=<sessionId>`
 
 - Each terminal pane gets its own tmux session named `sandbox-{sessionId}`
 - **First pane always uses `sandbox-default`** via `ensureDefaultSession()`
+- **Mouse mode is enabled globally** (`tmux set -g mouse on`) in `ensureDefaultSession()` — required for browser touch scrolling to work in the alternate buffer (xterm.js converts touch swipes to mouse escape sequences that tmux processes for scroll-back)
 - Reconnecting to an existing session reattaches (processes survive disconnects)
 - `close-session` message kills the tmux session permanently
 - On GCP suspend/resume: tmux sessions survive because RAM is preserved to disk
@@ -203,6 +206,7 @@ npm rebuild node-pty
 
 ## Lessons / Past Mistakes
 
+- **tmux mouse mode required for browser touch scrolling**: The frontend converts touch swipes to `WheelEvent`s, which xterm.js converts to mouse escape sequences. Without `tmux set -g mouse on`, tmux ignores these entirely. Set globally in `ensureDefaultSession()`.
 - **npm install fails without build-essential**: `node-pty` requires `make`, `g++`, `python3`. Fix: install `build-essential python3` in VM startup script.
 - **GCP disk persists across instance deletion (`autoDelete: false`)**: Orphaned disk has stale data. `pull-app.sh` found matching `.version` but `node_modules/` was missing. Fix: also check for `node_modules/` in version check.
 - **Nginx config double-escaping in startup script**: `\\$http_upgrade` in JS template literal becomes `\$http_upgrade` in shell, stays literal in nginx config. Fix: use `$http_upgrade` directly — JS only interpolates `${...}` (with brace).
