@@ -149,6 +149,22 @@ app.get('/api/sessions', (_req, res) => {
   res.json({ sessions: listTmuxSessions() });
 });
 
+app.post('/api/sessions/restart', async (_req, res) => {
+  try {
+    // Kill all sandbox-* tmux sessions
+    const sessions = listTmuxSessions();
+    for (const s of sessions) {
+      killTmuxSession(s);
+    }
+    // Re-create the default session (with tmux mouse on)
+    ensureDefaultSession();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Failed to restart sessions:', err);
+    res.status(500).json({ error: 'Failed to restart sessions' });
+  }
+});
+
 // Preview proxy: forward /preview/:port/* to localhost:{port}
 // Keeps GCP firewall locked to port 3001 only
 app.use('/preview/:port', (req, res) => {
