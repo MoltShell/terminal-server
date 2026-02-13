@@ -78,13 +78,18 @@ export function createPtyHandler(sessionId: string = 'default'): PtyHandler | nu
   }
 
   try {
+    // Strip Claude Code env vars so spawned shells don't think they're nested
+    const cleanEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([k]) => !k.startsWith('CLAUDE'))
+    );
+
     const ptyProcess = pty.spawn(shell, args, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
       cwd: process.env.HOME || process.cwd(),
       env: {
-        ...process.env,
+        ...cleanEnv,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
       },
@@ -146,6 +151,13 @@ export function ensureDefaultSession(): void {
   if (!tmuxSessionExists(sessionName)) {
     execSync(`tmux new-session -d -s ${sessionName}`, { stdio: 'ignore' });
     console.log(`Created default tmux session: ${sessionName}`);
+  }
+  // Enable mouse mode globally so touch swipes in the browser
+  // generate scroll events that tmux can handle
+  try {
+    execSync(`tmux set -g mouse on`, { stdio: 'ignore' });
+  } catch {
+    // tmux server may not be running yet
   }
 }
 
