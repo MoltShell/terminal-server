@@ -118,7 +118,7 @@ app.get('/health', (_req, res) => {
 // Layout persistence
 const LAYOUT_DIR = process.env.HOME
   ? `${process.env.HOME}/.moltshell`
-  : '/home/daytona/.moltshell';
+  : '/home/moltshell/.moltshell';
 const LAYOUT_FILE = `${LAYOUT_DIR}/layout.json`;
 
 app.get('/api/layout', (_req, res) => {
@@ -147,6 +147,27 @@ app.post('/api/layout', (req, res) => {
 
 app.get('/api/sessions', (_req, res) => {
   res.json({ sessions: listTmuxSessions() });
+});
+
+// Restart all tmux sessions (kills existing, re-creates default with mouse mode)
+app.post('/api/sessions/restart', (_req, res) => {
+  try {
+    // Kill all sandbox-* tmux sessions
+    const sessions = listTmuxSessions();
+    for (const sessionId of sessions) {
+      killTmuxSession(sessionId);
+    }
+    console.log(`[restart] Killed ${sessions.length} tmux session(s)`);
+
+    // Re-create default session with robust mouse mode
+    ensureDefaultSession();
+    console.log('[restart] Re-created default session');
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[restart] Failed:', err);
+    res.status(500).json({ error: 'Failed to restart sessions' });
+  }
 });
 
 // Preview proxy: forward /preview/:port/* to localhost:{port}

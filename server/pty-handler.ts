@@ -68,6 +68,9 @@ export function createPtyHandler(sessionId: string = 'default'): PtyHandler | nu
     } else {
       // Create new session
       args = ['new-session', '-s', tmuxSessionName];
+      // Set mouse mode on this session after creation so touch scrolling works
+      // even if the global setting didn't take effect
+      setTimeout(() => setMouseMode(tmuxSessionName), 200);
       console.log(`Creating new tmux session: ${tmuxSessionName}`);
     }
   } else {
@@ -142,6 +145,53 @@ export function createPtyHandler(sessionId: string = 'default'): PtyHandler | nu
 }
 
 /**
+ * Set mouse mode on a specific tmux session.
+ */
+function setMouseMode(sessionName: string): void {
+  try {
+    execSync(`tmux set-option -t ${sessionName} mouse on`, { stdio: 'ignore' });
+  } catch {
+    // Session may not exist
+  }
+}
+
+/**
+ * Enable mouse mode globally (for new sessions) and on all existing sandbox-* sessions.
+ * Retries the global set up to 3 times since the tmux server may still be initializing.
+ */
+function enableMouseModeAll(): void {
+  // Set globally with retry — tmux server may not be fully ready
+  let globalSet = false;
+  for (let i = 0; i < 3; i++) {
+    try {
+      execSync(`tmux set -g mouse on`, { stdio: 'ignore' });
+      globalSet = true;
+      break;
+    } catch {
+      if (i < 2) execSync('sleep 0.2', { stdio: 'ignore' });
+    }
+  }
+  console.log(`[mouse-mode] global set: ${globalSet ? 'ok' : 'FAILED after 3 attempts'}`);
+
+  // Also apply to all existing sandbox-* sessions (global only affects new ones)
+  try {
+    const output = execSync("tmux list-sessions -F '#{session_name}'", {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    const sessions = output.split('\n').map(s => s.trim()).filter(s => s.startsWith('sandbox-'));
+    for (const session of sessions) {
+      setMouseMode(session);
+    }
+    if (sessions.length > 0) {
+      console.log(`[mouse-mode] applied to ${sessions.length} existing session(s): ${sessions.join(', ')}`);
+    }
+  } catch {
+    // No sessions yet — that's fine, global covers future ones
+  }
+}
+
+/**
  * Ensure the default tmux session exists on server startup.
  * Called once so the client can always attach to `sandbox-default`.
  */
@@ -150,15 +200,13 @@ export function ensureDefaultSession(): void {
   const sessionName = 'sandbox-default';
   if (!tmuxSessionExists(sessionName)) {
     execSync(`tmux new-session -d -s ${sessionName}`, { stdio: 'ignore' });
+    // Brief delay to let tmux server fully initialize
+    execSync('sleep 0.1', { stdio: 'ignore' });
     console.log(`Created default tmux session: ${sessionName}`);
   }
-  // Enable mouse mode globally so touch swipes in the browser
-  // generate scroll events that tmux can handle
-  try {
-    execSync(`tmux set -g mouse on`, { stdio: 'ignore' });
-  } catch {
-    // tmux server may not be running yet
-  }
+  // Enable mouse mode globally and on all existing sessions so touch swipes
+  // in the browser generate scroll events that tmux can handle
+  enableMouseModeAll();
 }
 
 /**
