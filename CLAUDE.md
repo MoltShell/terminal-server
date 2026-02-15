@@ -1,6 +1,6 @@
 # MoltShell Terminal Server - AI Assistant Guide
 
-**Last Updated**: 2026-02-13
+**Last Updated**: 2026-02-15
 **Purpose**: Express + WebSocket terminal server running on user VMs/sandboxes
 **Sibling Repo**: [MoltShell/app](https://github.com/MoltShell/app) — React frontend + Cloudflare Worker API
 
@@ -122,13 +122,14 @@ Connection URL: `/ws/terminal?session=<sessionId>`
 | `/api/layout` | GET | Get saved split layout from disk |
 | `/api/layout` | POST | Save split layout to disk |
 | `/api/sessions` | GET | List live tmux sessions |
+| `/api/sessions/restart` | POST | Kill all sandbox-* tmux sessions, re-create default with mouse mode |
 | `/preview/:port/*` | ALL | Reverse proxy to `localhost:{port}` (blocks <1024 and 3001) |
 
 ## PTY / tmux Architecture
 
 - Each terminal pane gets its own tmux session named `sandbox-{sessionId}`
 - **First pane always uses `sandbox-default`** via `ensureDefaultSession()`
-- **Mouse mode is enabled globally** (`tmux set -g mouse on`) in `ensureDefaultSession()` — required for browser touch scrolling to work in the alternate buffer (xterm.js converts touch swipes to mouse escape sequences that tmux processes for scroll-back)
+- **Mouse mode is set robustly** in `ensureDefaultSession()` — retries `tmux set -g mouse on` up to 3 times (200ms apart), then also applies `tmux set-option -t <session> mouse on` to all existing `sandbox-*` sessions (the `-g` flag only affects new sessions). Additionally, `createPtyHandler()` sets mouse mode per-session 200ms after creation. Required for browser touch scrolling in the alternate buffer (xterm.js converts touch swipes to mouse escape sequences that tmux processes for scroll-back)
 - Reconnecting to an existing session reattaches (processes survive disconnects)
 - `close-session` message kills the tmux session permanently
 - On GCP suspend/resume: tmux sessions survive because RAM is preserved to disk
@@ -212,6 +213,10 @@ npm rebuild node-pty
 - **Nginx config double-escaping in startup script**: `\\$http_upgrade` in JS template literal becomes `\$http_upgrade` in shell, stays literal in nginx config. Fix: use `$http_upgrade` directly — JS only interpolates `${...}` (with brace).
 - **Cloudflare Workers' fetch() ignores non-standard ports**: Requests to `:3001` silently route to port 80. Fix: nginx on port 80 proxies to localhost:3001.
 - **Daytona Node v24.3.0 breaks `npx tsx`**: Fix: use `tsx` directly (global binary) wrapped in `bash -c`. The toolbox API does NOT invoke a shell by default.
+- **`tmux set -g mouse on` doesn't retrofit existing sessions**: The `-g` (global) flag only sets the default for **new** sessions. Sessions that already exist when the command runs won't inherit mouse mode. Fix: after the global set, also run `tmux set-option -t <session> mouse on` on every existing `sandbox-*` session.
+- **`tmux set -g mouse on` can fail silently after new-session**: The tmux server may not be fully initialized yet. Fix: add `sleep 0.1` after `tmux new-session -d`, and retry the global set up to 3 times with 200ms between attempts.
+- **GCP startup scripts are baked into instance metadata at creation time**: Updating the startup script in provisioner code does NOT update existing VMs. Old VMs keep running the old script (e.g., `User=daytona` instead of `User=moltshell`). Fix: use GCP `setMetadata` API to push the latest startup script to the instance before rebooting. The restart button now calls `updateStartupScript()` + `reset()`.
+- **Layout dir fallback was hardcoded to `/home/daytona`**: The terminal server's `LAYOUT_DIR` had a fallback to `/home/daytona/.moltshell`. Fix: changed to `/home/moltshell/.moltshell`.
 
 ---
 
