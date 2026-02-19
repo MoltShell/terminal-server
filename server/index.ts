@@ -17,9 +17,10 @@ const ECHO_MODE = process.env.TERMINAL_MODE === 'echo';
 const SANDBOX_ID = process.env.SANDBOX_ID;
 const WORKER_API_URL = process.env.WORKER_API_URL || 'https://sandbox-launcher.terui.workers.dev';
 
-// Self-update: check GCS for new app version on WebSocket connections
+// Self-update: check GitHub for new commits on WebSocket connections
 const LOCAL_VERSION_FILE = '/opt/sandboxterminal/.version';
 const PULL_SCRIPT = '/opt/moltshell/pull-app.sh';
+const GITHUB_API_URL = 'https://api.github.com/repos/MoltShell/terminal-server/commits/main';
 let lastUpdateCheck = 0;
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000; // 5 min
 
@@ -29,13 +30,14 @@ async function checkForUpdates() {
   try {
     const localVersion = existsSync(LOCAL_VERSION_FILE)
       ? readFileSync(LOCAL_VERSION_FILE, 'utf-8').trim() : '';
-    const res = await fetch('https://storage.googleapis.com/moltshell-releases/latest-version.txt');
+    const res = await fetch(GITHUB_API_URL, {
+      headers: { 'Accept': 'application/vnd.github.sha', 'User-Agent': 'moltshell-terminal-server' },
+    });
     if (!res.ok) return;
     const remote = (await res.text()).trim();
     if (remote && remote !== localVersion) {
       console.log(`[update] New version available: ${remote} (local: ${localVersion || 'none'})`);
       if (existsSync(PULL_SCRIPT)) {
-        // Use async spawn to avoid blocking the event loop during download
         const child = spawn(PULL_SCRIPT, [], { stdio: 'inherit' });
         child.on('close', (code) => {
           if (code === 0) {
