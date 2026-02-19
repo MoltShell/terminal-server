@@ -1,14 +1,14 @@
 # MoltShell Terminal Server - AI Assistant Guide
 
-**Last Updated**: 2026-02-15
-**Purpose**: Express + WebSocket terminal server running on user VMs/sandboxes
+**Last Updated**: 2026-02-19
+**Purpose**: Express + WebSocket terminal server running on user GCP VMs
 **Sibling Repo**: [MoltShell/app](https://github.com/MoltShell/app) — React frontend + Cloudflare Worker API
 
 ---
 
 ## Project Overview
 
-This repo contains the **terminal server** for MoltShell — an Express + WebSocket server that provides persistent terminal sessions via `node-pty` and `tmux`. It runs on per-user compute backends (GCP Compute Engine VMs or Daytona sandboxes) and is managed by the Cloudflare Worker API in the sibling `app` repo.
+This repo contains the **terminal server** for MoltShell — an Express + WebSocket server that provides persistent terminal sessions via `node-pty` and `tmux`. It runs on per-user GCP Compute Engine VMs and is managed by the Cloudflare Worker API in the sibling `app` repo.
 
 The server handles multiple independent terminal sessions (one per split pane), persists layout state to disk, and includes a preview proxy for accessing services running on the VM.
 
@@ -41,7 +41,6 @@ terminal-server/
 │                                 #   - Handles resize, input, close-session
 │                                 #   - Cleanup on disconnect
 ├── scripts/
-│   ├── deploy-to-gcs.sh         # (LEGACY — no longer used) Upload to GCS
 │   └── build-gcp-image.sh       # GCP custom image builder (future)
 ├── package.json
 ├── tsconfig.json
@@ -130,7 +129,7 @@ Split layout (tree structure + active pane ID) is saved to `~/.moltshell/layout.
 
 ## Preview Proxy
 
-Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM, adding `X-Daytona-Skip-Preview-Warning` header for Daytona compatibility.
+Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM.
 
 **Security**: Blocks privileged ports (<1024) and the terminal server port (3001) to prevent SSRF.
 
@@ -139,9 +138,9 @@ Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM
 **GCP Project**: `termos-70709`
 **Zone**: `us-central1-a`
 **Machine type**: `e2-medium` (2 vCPU, 4GB RAM)
-**Disk**: 30GB standard persistent disk (Ubuntu 22.04)
+**Disk**: 15GB standard persistent disk (Ubuntu 22.04)
 
-**Key advantage**: GCP `suspend` saves full RAM to disk. On `resume`, all processes (including tmux sessions) restore exactly. Zero compute billing while suspended (~$0.83/mo disk only).
+**Key advantage**: GCP `suspend` saves full RAM to disk. On `resume`, all processes (including tmux sessions) restore exactly. Zero compute billing while suspended (~$0.42/mo disk only).
 
 **VM Startup Flow**:
 1. Startup script installs Node.js 22, tmux, nginx, tsx, build-essential
@@ -193,7 +192,6 @@ npm rebuild node-pty
 - Check GitHub API access: `curl -sf -H "Accept: application/vnd.github.sha" https://api.github.com/repos/MoltShell/terminal-server/commits/main`
 - Check local version: `cat /opt/sandboxterminal/.version`
 - Manual update: `/opt/moltshell/pull-app.sh`
-- Check if VM has the old GCS-based pull-app.sh: `cat /opt/moltshell/pull-app.sh` — if it references `storage.googleapis.com`, the VM needs a restart-session to get the updated startup script
 
 ## Lessons / Past Mistakes
 
@@ -202,12 +200,9 @@ npm rebuild node-pty
 - **GCP disk persists across instance deletion (`autoDelete: false`)**: Orphaned disk has stale data. `pull-app.sh` found matching `.version` but `node_modules/` was missing. Fix: also check for `node_modules/` in version check.
 - **Nginx config double-escaping in startup script**: `\\$http_upgrade` in JS template literal becomes `\$http_upgrade` in shell, stays literal in nginx config. Fix: use `$http_upgrade` directly — JS only interpolates `${...}` (with brace).
 - **Cloudflare Workers' fetch() ignores non-standard ports**: Requests to `:3001` silently route to port 80. Fix: nginx on port 80 proxies to localhost:3001.
-- **Daytona Node v24.3.0 breaks `npx tsx`**: Fix: use `tsx` directly (global binary) wrapped in `bash -c`. The toolbox API does NOT invoke a shell by default.
 - **`tmux set -g mouse on` doesn't retrofit existing sessions**: The `-g` (global) flag only sets the default for **new** sessions. Sessions that already exist when the command runs won't inherit mouse mode. Fix: after the global set, also run `tmux set-option -t <session> mouse on` on every existing `sandbox-*` session.
 - **`tmux set -g mouse on` can fail silently after new-session**: The tmux server may not be fully initialized yet. Fix: add `sleep 0.1` after `tmux new-session -d`, and retry the global set up to 3 times with 200ms between attempts.
 - **GCP startup scripts are baked into instance metadata at creation time**: Updating the startup script in provisioner code does NOT update existing VMs. Old VMs keep running the old script (e.g., `User=daytona` instead of `User=moltshell`). Fix: use GCP `setMetadata` API to push the latest startup script to the instance before rebooting. The restart button now calls `updateStartupScript()` + `reset()`.
-- **Layout dir fallback was hardcoded to `/home/daytona`**: The terminal server's `LAYOUT_DIR` had a fallback to `/home/daytona/.moltshell`. Fix: changed to `/home/moltshell/.moltshell`.
-- **GCS self-update never worked — VMs had no service account**: VMs were created without a service account (`serviceAccounts: null`), so `pull-app.sh` couldn't get a metadata token for GCS auth. Migrated to GitHub: repo is public, VMs download tarballs unauthenticated. Self-update checks GitHub API for latest commit SHA. Giving VMs a service account was rejected as too dangerous (overprivileged).
 - **`${VAR:-default}` bash syntax inside JS template literals**: Template literals interpret `${...}` as JS expressions. Use `$VAR` (no braces) for shell variables in startup script template literals. Bash default values like `${VAR:-fallback}` must be avoided.
 - **Existing VMs keep the old pull-app.sh after code changes**: The startup script (which writes `pull-app.sh`) is baked into VM metadata at creation time. Existing VMs won't get the new GitHub-based `pull-app.sh` until they receive an updated startup script via `handleRestartSession` (which calls `updateStartupScript()` + reboot). The self-update in `index.ts` (which runs on WS connections) will work with GitHub for the server code, but `pull-app.sh` itself won't be updated until the VM reboots with fresh metadata.
 - **tmux `copy-pipe-and-cancel` breaks desktop text selection**: Mouse mode's default `MouseDragEnd1Pane` binding uses `copy-pipe-and-cancel`, which exits copy-mode on mouseup — making selections disappear instantly. Fix: override with `copy-pipe-no-clear` to keep selection visible.
