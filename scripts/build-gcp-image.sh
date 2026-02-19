@@ -88,7 +88,7 @@ echo "[$(date)] Creating systemd service..."
 cat > /etc/systemd/system/moltshell-terminal.service <<'"'"'SYSTEMD'"'"'
 [Unit]
 Description=MoltShell Terminal Server
-After=network.target
+After=network.target google-startup-scripts.service
 
 [Service]
 Type=simple
