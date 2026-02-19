@@ -143,11 +143,18 @@ Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM
 **Key advantage**: GCP `suspend` saves full RAM to disk. On `resume`, all processes (including tmux sessions) restore exactly. Zero compute billing while suspended (~$0.42/mo disk only).
 
 **VM Startup Flow**:
+First boot:
 1. Startup script installs Node.js 22, tmux, nginx, tsx, build-essential
-2. Creates `moltshell` user, app dirs, systemd service
+2. Creates `moltshell` user, app dirs, systemd service (with `After=google-startup-scripts.service`)
 3. Writes SANDBOX_ID from GCE metadata
 4. Creates `/opt/moltshell/pull-app.sh` (GitHub download script)
-5. Runs `pull-app.sh` to download code from GitHub + npm install, starts terminal service
+5. Runs `pull-app.sh` to download code from GitHub + npm install, restarts terminal service
+6. Writes first-boot marker at `/opt/moltshell/.first-boot-done`
+
+Subsequent boots (after reset/reboot):
+1. Skips package installs (first-boot marker exists)
+2. Writes SANDBOX_ID, updates pull-app.sh
+3. Runs `pull-app.sh` (skips if already up to date) + `systemctl restart moltshell-terminal`
 
 **Nginx**: Runs on port 80, proxies to localhost:3001. Required because Cloudflare Workers' `fetch()` only connects to standard ports.
 
@@ -206,6 +213,7 @@ npm rebuild node-pty
 - **`${VAR:-default}` bash syntax inside JS template literals**: Template literals interpret `${...}` as JS expressions. Use `$VAR` (no braces) for shell variables in startup script template literals. Bash default values like `${VAR:-fallback}` must be avoided.
 - **Existing VMs keep the old pull-app.sh after code changes**: The startup script (which writes `pull-app.sh`) is baked into VM metadata at creation time. Existing VMs won't get the new GitHub-based `pull-app.sh` until they receive an updated startup script via `handleRestartSession` (which calls `updateStartupScript()` + reboot). The self-update in `index.ts` (which runs on WS connections) will work with GitHub for the server code, but `pull-app.sh` itself won't be updated until the VM reboots with fresh metadata.
 - **tmux `copy-pipe-and-cancel` breaks desktop text selection**: Mouse mode's default `MouseDragEnd1Pane` binding uses `copy-pipe-and-cancel`, which exits copy-mode on mouseup — making selections disappear instantly. Fix: override with `copy-pipe-no-clear` to keep selection visible.
+- **systemd service race on VM reboot**: Without `After=google-startup-scripts.service`, the terminal service auto-starts with old code before the startup script downloads new code. Fix: add dependency + use `systemctl restart` (not `start`) at end of startup script + first-boot marker to skip slow installs on reboots.
 
 ---
 
