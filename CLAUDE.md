@@ -21,7 +21,7 @@ The server handles multiple independent terminal sessions (one per split pane), 
 | PTY | node-pty + tmux for persistence |
 | Runtime | Node.js 22 + tsx |
 | Process Manager | systemd (on GCP VMs) |
-| Deployment | GCS bucket (`gs://moltshell-releases/`) |
+| Deployment | GitHub public repo (VMs pull from GitHub) |
 
 ## Project Structure
 
@@ -34,19 +34,18 @@ terminal-server/
 │   │                             #   - Preview proxy at /preview/:port/*
 │   │                             #   - Health endpoint at /health
 │   │                             #   - Static file serving from dist/ (if present)
-│   │                             #   - Self-update via GCS version check on WS connection
+│   │                             #   - Self-update via GitHub API version check on WS connection
 │   └── pty-handler.ts            # Multi-session tmux PTY management
 │                                 #   - Creates/attaches tmux sessions named sandbox-{sessionId}
 │                                 #   - ensureDefaultSession() for deterministic first pane
 │                                 #   - Handles resize, input, close-session
 │                                 #   - Cleanup on disconnect
 ├── scripts/
-│   ├── deploy-to-gcs.sh         # Upload server tarball to gs://moltshell-releases/
+│   ├── deploy-to-gcs.sh         # (LEGACY — no longer used) Upload to GCS
 │   └── build-gcp-image.sh       # GCP custom image builder (future)
-├── deploy-to-daytona.mjs        # Deploy to Daytona sandbox (legacy)
 ├── package.json
 ├── tsconfig.json
-└── .github/workflows/deploy.yml  # CI/CD: typecheck + deploy to GCS on push to main
+└── .github/workflows/deploy.yml  # CI/CD: typecheck on push to main (VMs pull directly from GitHub)
 ```
 
 ## Quick Start
@@ -79,25 +78,16 @@ On GCP VMs, the server runs as a systemd service with `Restart=always`.
 
 ## Deployment
 
-**Push to `main` triggers CI/CD automatically** — no manual deploy steps needed. Just commit and push.
+**Push to `main` triggers deployment automatically** — no manual steps needed. Just commit and push.
 
-### GCS Release Pipeline (primary)
-```bash
-npm run deploy       # ./scripts/deploy-to-gcs.sh
-```
+The repo is **public** on GitHub. VMs pull code directly from GitHub — no GCS bucket or service account needed.
 
-This creates a tarball of `server/` + `package.json` + `package-lock.json`, computes a SHA256 version hash, and uploads both to `gs://moltshell-releases/`.
-
-**CI/CD**: GitHub Actions runs typecheck + deploy to GCS on push to `main`. PRs get typecheck only (no deploy).
+**CI/CD**: GitHub Actions runs typecheck on push to `main`. PRs get typecheck only.
 
 **How VMs pick up updates**:
-1. On first boot: startup script runs `pull-app.sh` to download from GCS
-2. On WebSocket connection: server checks GCS version (5 min throttle), auto-restarts via systemd if stale
-
-### Daytona (legacy)
-```bash
-node deploy-to-daytona.mjs
-```
+1. On first boot: startup script runs `pull-app.sh` which downloads from `https://github.com/MoltShell/terminal-server/archive/refs/heads/main.tar.gz`
+2. On WebSocket connection: server checks GitHub API for latest commit SHA on `main` (5 min throttle), runs `pull-app.sh` + auto-restarts via systemd if stale
+3. Version tracking: `/opt/sandboxterminal/.version` stores the current commit SHA
 
 ## WebSocket Protocol
 
@@ -157,8 +147,8 @@ Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM
 1. Startup script installs Node.js 22, tmux, nginx, tsx, build-essential
 2. Creates `moltshell` user, app dirs, systemd service
 3. Writes SANDBOX_ID from GCE metadata
-4. Creates `/opt/moltshell/pull-app.sh` (GCS download script)
-5. Runs `pull-app.sh` to download code + npm install, starts terminal service
+4. Creates `/opt/moltshell/pull-app.sh` (GitHub download script)
+5. Runs `pull-app.sh` to download code from GitHub + npm install, starts terminal service
 
 **Nginx**: Runs on port 80, proxies to localhost:3001. Required because Cloudflare Workers' `fetch()` only connects to standard ports.
 
@@ -167,8 +157,7 @@ Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM
 # Service account: moltshell-vm-manager@termos-70709.iam.gserviceaccount.com
 # Roles: roles/compute.admin, roles/iam.serviceAccountUser
 # Firewall: TCP 3001 from Cloudflare IPs only, tag: terminal-server
-# GCS bucket: moltshell-releases (us-central1)
-# Default compute SA: roles/storage.objectViewer on bucket
+# VMs have NO service account attached — they pull code from the public GitHub repo
 ```
 
 ## Environment Variables
@@ -182,9 +171,9 @@ Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM
 ## Self-Update Mechanism
 
 On each WebSocket connection, the server:
-1. Checks `gs://moltshell-releases/latest-version.txt` (throttled to every 5 min)
-2. Compares with local `.version` file
-3. If different: downloads new tarball, extracts, runs `npm install`, exits
+1. Calls GitHub API (`GET /repos/MoltShell/terminal-server/commits/main` with `Accept: application/vnd.github.sha`) to get the latest commit SHA (throttled to every 5 min)
+2. Compares with local `/opt/sandboxterminal/.version` file
+3. If different: runs `/opt/moltshell/pull-app.sh` (downloads tarball from GitHub, extracts, npm install), then exits
 4. systemd `Restart=always` restarts the service with updated code
 
 ## Troubleshooting
@@ -201,9 +190,10 @@ npm rebuild node-pty
 - Verify node_modules: `ls /opt/moltshell/app/node_modules`
 
 ### Self-update not working
-- Check GCS access: `gsutil cat gs://moltshell-releases/latest-version.txt`
-- Check local version: `cat /opt/moltshell/app/.version`
+- Check GitHub API access: `curl -sf -H "Accept: application/vnd.github.sha" https://api.github.com/repos/MoltShell/terminal-server/commits/main`
+- Check local version: `cat /opt/sandboxterminal/.version`
 - Manual update: `/opt/moltshell/pull-app.sh`
+- Check if VM has the old GCS-based pull-app.sh: `cat /opt/moltshell/pull-app.sh` — if it references `storage.googleapis.com`, the VM needs a restart-session to get the updated startup script
 
 ## Lessons / Past Mistakes
 
@@ -217,8 +207,11 @@ npm rebuild node-pty
 - **`tmux set -g mouse on` can fail silently after new-session**: The tmux server may not be fully initialized yet. Fix: add `sleep 0.1` after `tmux new-session -d`, and retry the global set up to 3 times with 200ms between attempts.
 - **GCP startup scripts are baked into instance metadata at creation time**: Updating the startup script in provisioner code does NOT update existing VMs. Old VMs keep running the old script (e.g., `User=daytona` instead of `User=moltshell`). Fix: use GCP `setMetadata` API to push the latest startup script to the instance before rebooting. The restart button now calls `updateStartupScript()` + `reset()`.
 - **Layout dir fallback was hardcoded to `/home/daytona`**: The terminal server's `LAYOUT_DIR` had a fallback to `/home/daytona/.moltshell`. Fix: changed to `/home/moltshell/.moltshell`.
+- **GCS self-update never worked — VMs had no service account**: VMs were created without a service account (`serviceAccounts: null`), so `pull-app.sh` couldn't get a metadata token for GCS auth. Migrated to GitHub: repo is public, VMs download tarballs unauthenticated. Self-update checks GitHub API for latest commit SHA. Giving VMs a service account was rejected as too dangerous (overprivileged).
+- **`${VAR:-default}` bash syntax inside JS template literals**: Template literals interpret `${...}` as JS expressions. Use `$VAR` (no braces) for shell variables in startup script template literals. Bash default values like `${VAR:-fallback}` must be avoided.
+- **Existing VMs keep the old pull-app.sh after code changes**: The startup script (which writes `pull-app.sh`) is baked into VM metadata at creation time. Existing VMs won't get the new GitHub-based `pull-app.sh` until they receive an updated startup script via `handleRestartSession` (which calls `updateStartupScript()` + reboot). The self-update in `index.ts` (which runs on WS connections) will work with GitHub for the server code, but `pull-app.sh` itself won't be updated until the VM reboots with fresh metadata.
+- **tmux `copy-pipe-and-cancel` breaks desktop text selection**: Mouse mode's default `MouseDragEnd1Pane` binding uses `copy-pipe-and-cancel`, which exits copy-mode on mouseup — making selections disappear instantly. Fix: override with `copy-pipe-no-clear` to keep selection visible.
 
 ---
 
-**GitHub Repo**: https://github.com/MoltShell/terminal-server
-**GCS Bucket**: gs://moltshell-releases/
+**GitHub Repo**: https://github.com/MoltShell/terminal-server (PUBLIC)

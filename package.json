@@ -7,7 +7,7 @@
     "dev": "tsx watch server/index.ts",
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
-    "deploy": "./scripts/deploy-to-gcs.sh"
+    "deploy": "echo 'Deploy is automatic — push to main and VMs pull from GitHub'"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
