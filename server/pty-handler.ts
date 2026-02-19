@@ -173,6 +173,17 @@ function enableMouseModeAll(): void {
   }
   console.log(`[mouse-mode] global set: ${globalSet ? 'ok' : 'FAILED after 3 attempts'}`);
 
+  // Override MouseDragEnd to keep selection visible after mouseup.
+  // Default `copy-pipe-and-cancel` exits copy-mode, clearing the highlight.
+  // `copy-pipe-no-clear` copies to tmux buffer but stays in copy-mode.
+  try {
+    execSync(`tmux bind -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-no-clear`, { stdio: 'ignore' });
+    execSync(`tmux bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-no-clear`, { stdio: 'ignore' });
+    console.log('[mouse-mode] MouseDragEnd set to copy-pipe-no-clear');
+  } catch {
+    console.warn('[mouse-mode] Failed to override MouseDragEnd binding');
+  }
+
   // Also apply to all existing sandbox-* sessions (global only affects new ones)
   try {
     const output = execSync("tmux list-sessions -F '#{session_name}'", {
