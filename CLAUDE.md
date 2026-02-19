@@ -88,6 +88,41 @@ The repo is **public** on GitHub. VMs pull code directly from GitHub — no GCS 
 2. On WebSocket connection: server checks GitHub API for latest commit SHA on `main` (5 min throttle), runs `pull-app.sh` + auto-restarts via systemd if stale
 3. Version tracking: `/opt/sandboxterminal/.version` stores the current commit SHA
 
+## Development Workflow (MANDATORY)
+
+### For terminal-server changes
+
+This repo deploys directly on push to `main` (VMs pull from GitHub). There's no staging pipeline here — the staging environment in the **app repo** tests the full stack including this server.
+
+```bash
+# 1. Make changes, typecheck locally
+npx tsc --noEmit
+
+# 2. Test locally with the frontend
+npm run dev                      # port 3001
+cd ../app && npm run dev         # port 5173 — open http://localhost:5173/dev
+
+# 3. Commit and push to main (this repo deploys directly)
+git add <files>
+git commit -m "Description"
+git push origin main
+```
+
+**For changes that affect both repos**: Make the terminal-server changes first (push to main so the staging VM picks them up), then make the app changes in a feature branch with a PR so the staging pipeline tests the full stack.
+
+### Staging environment
+
+The staging VM (`moltshell-staging`) runs this terminal server. The staging pipeline in `MoltShell/app` resumes the VM, runs Playwright tests against it, and suspends it when done. Changes pushed to `main` here will be picked up by the staging VM on its next boot (when the CI pipeline resumes it).
+
+### Agent Protocol: Testing Before Delivery
+
+Before telling the user "it's done":
+
+1. **Run typecheck locally**: `npx tsc --noEmit`
+2. **Test locally with the frontend** if possible (run both servers, open `/dev`)
+3. **For significant changes**: Push to main, then make a trivial PR in the app repo to trigger the staging pipeline and verify the terminal works end-to-end
+4. **Never claim "it works" without evidence** — run the typecheck, test the change, verify the output
+
 ## WebSocket Protocol
 
 Connection URL: `/ws/terminal?session=<sessionId>`
@@ -214,6 +249,8 @@ npm rebuild node-pty
 - **Existing VMs keep the old pull-app.sh after code changes**: The startup script (which writes `pull-app.sh`) is baked into VM metadata at creation time. Existing VMs won't get the new GitHub-based `pull-app.sh` until they receive an updated startup script via `handleRestartSession` (which calls `updateStartupScript()` + reboot). The self-update in `index.ts` (which runs on WS connections) will work with GitHub for the server code, but `pull-app.sh` itself won't be updated until the VM reboots with fresh metadata.
 - **tmux `copy-pipe-and-cancel` breaks desktop text selection**: Mouse mode's default `MouseDragEnd1Pane` binding uses `copy-pipe-and-cancel`, which exits copy-mode on mouseup — making selections disappear instantly. Fix: override with `copy-pipe-no-clear` to keep selection visible.
 - **systemd service race on VM reboot**: Without `After=google-startup-scripts.service`, the terminal service auto-starts with old code before the startup script downloads new code. Fix: add dependency + use `systemctl restart` (not `start`) at end of startup script + first-boot marker to skip slow installs on reboots.
+- **`cp -r source/ dest/` nests when dest exists**: `cp -r dir/ existing_dir/` copies `dir` **inside** `existing_dir` as `existing_dir/dir/`, instead of overwriting contents. In `pull-app.sh`, `cp -r .../server/ $APP_DIR/server/` created `server/server/` with the new code while the old code remained in `server/`. Fix: `rm -rf "$APP_DIR/server"` before `cp -r`, and omit trailing slashes.
+- **Sandbox state values are app-defined, not GCP values**: The D1 `state` column uses app states: `stopped`, `starting`, `started`, `stopping`, `error`. Never write raw GCP states like `running` or `suspended` — the frontend has no case for them and renders a broken card with no action buttons. `mapGcpState()` in `provisioner.ts` maps GCP statuses (RUNNING→`started`, SUSPENDED→`stopped`, etc.). When manually editing D1, always use the app state names.
 
 ---
 
