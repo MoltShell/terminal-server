@@ -94,6 +94,8 @@ The repo is **public** on GitHub. VMs pull code directly from GitHub — no GCS 
 
 This repo deploys directly on push to `main` (VMs pull from GitHub). There's no staging pipeline here — the staging environment in the **app repo** tests the full stack including this server.
 
+**WARNING: Pushing to `main` here immediately affects ALL production VMs.** The self-update mechanism checks GitHub on every WebSocket connection (5 min throttle). If the new code breaks, all user VMs crash. Always test locally first and get user approval before pushing.
+
 ```bash
 # 1. Make changes, typecheck locally
 npx tsc --noEmit
@@ -102,13 +104,15 @@ npx tsc --noEmit
 npm run dev                      # port 3001
 cd ../app && npm run dev         # port 5173 — open http://localhost:5173/dev
 
-# 3. Commit and push to main (this repo deploys directly)
+# 3. Get user approval, then commit and push to main
 git add <files>
 git commit -m "Description"
 git push origin main
 ```
 
 **For changes that affect both repos**: Make the terminal-server changes first (push to main so the staging VM picks them up), then make the app changes in a feature branch with a PR so the staging pipeline tests the full stack.
+
+**NEVER push to main or merge PRs without the user's explicit approval.** Typecheck passing and staging passing are not enough — the user must say "push it" or "merge it" first.
 
 ### Staging environment
 
