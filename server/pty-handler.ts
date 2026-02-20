@@ -66,12 +66,13 @@ export function createPtyHandler(sessionId: string = 'default'): PtyHandler | nu
       args = ['attach-session', '-t', tmuxSessionName];
       console.log(`Attaching to existing tmux session: ${tmuxSessionName}`);
     } else {
-      // Create new session
-      args = ['new-session', '-s', tmuxSessionName];
+      // Create new session — start in home directory, not the service's WorkingDirectory
+      const home = process.env.HOME || '/home/moltshell';
+      args = ['new-session', '-s', tmuxSessionName, '-c', home];
       // Set mouse mode on this session after creation so touch scrolling works
       // even if the global setting didn't take effect
       setTimeout(() => setMouseMode(tmuxSessionName), 200);
-      console.log(`Creating new tmux session: ${tmuxSessionName}`);
+      console.log(`Creating new tmux session: ${tmuxSessionName} (cwd: ${home})`);
     }
   } else {
     // Fallback to regular shell if tmux not available
@@ -210,7 +211,8 @@ export function ensureDefaultSession(): void {
   if (!hasTmux()) return;
   const sessionName = 'sandbox-default';
   if (!tmuxSessionExists(sessionName)) {
-    execSync(`tmux new-session -d -s ${sessionName}`, { stdio: 'ignore' });
+    const home = process.env.HOME || '/home/moltshell';
+    execSync(`tmux new-session -d -s ${sessionName} -c ${home}`, { stdio: 'ignore' });
     // Brief delay to let tmux server fully initialize
     execSync('sleep 0.1', { stdio: 'ignore' });
     console.log(`Created default tmux session: ${sessionName}`);
