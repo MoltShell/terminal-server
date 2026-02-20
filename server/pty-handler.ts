@@ -185,6 +185,19 @@ function enableMouseModeAll(): void {
     console.warn('[mouse-mode] Failed to override MouseDragEnd binding');
   }
 
+  // Unbind tmux's right-click popup menu (tmux 3.0+) so the browser's native
+  // context menu appears instead — allows copy/paste on laptops.
+  try {
+    execSync(`tmux unbind -n MouseDown3Pane`, { stdio: 'ignore' });
+    execSync(`tmux unbind -n MouseDown3Status`, { stdio: 'ignore' });
+    execSync(`tmux unbind -n MouseDown3StatusLeft`, { stdio: 'ignore' });
+    execSync(`tmux unbind -n MouseDown3StatusRight`, { stdio: 'ignore' });
+    execSync(`tmux unbind -n MouseDown3StatusDefault`, { stdio: 'ignore' });
+    console.log('[mouse-mode] Unbound right-click popup menu');
+  } catch {
+    console.warn('[mouse-mode] Failed to unbind right-click popup');
+  }
+
   // Also apply to all existing sandbox-* sessions (global only affects new ones)
   try {
     const output = execSync("tmux list-sessions -F '#{session_name}'", {
