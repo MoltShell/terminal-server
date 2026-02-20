@@ -253,6 +253,7 @@ npm rebuild node-pty
 - **Sandbox state values are app-defined, not GCP values**: The D1 `state` column uses app states: `stopped`, `starting`, `started`, `stopping`, `error`. Never write raw GCP states like `running` or `suspended` — the frontend has no case for them and renders a broken card with no action buttons. `mapGcpState()` in `provisioner.ts` maps GCP statuses (RUNNING→`started`, SUSPENDED→`stopped`, etc.). When manually editing D1, always use the app state names.
 - **tmux new-session inherits cwd from the tmux server, not from pty.spawn**: The `cwd` option in `pty.spawn('tmux', ...)` only sets the cwd for the tmux client process. The shell inside the tmux session starts in the tmux server's cwd (systemd WorkingDirectory = `/opt/sandboxterminal`). Fix: pass `-c $HOME` to `tmux new-session` so users land in their home directory.
 - **User home directory must be clean**: `/home/moltshell` is the user's workspace. Never put infra/backend files there — app code lives in `/opt/sandboxterminal`, scripts in `/opt/moltshell`. The startup script cleans `~/snap` (Ubuntu clutter) and `~/.sudo_as_admin_successful` on every boot.
+- **tmux 3.0+ right-click popup menu blocks browser context menu**: When mouse mode is enabled, tmux shows a built-in popup menu on right-click ("go to top", "go to bottom", "copy line", etc.) that prevents the browser's native context menu from appearing. Fix: `tmux unbind -n MouseDown3Pane` (and related status bindings) in `enableMouseModeAll()`, plus `rightClickSelectsWord: true` in xterm.js options on the frontend.
 
 ---
 
