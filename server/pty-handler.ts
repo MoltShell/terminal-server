@@ -198,6 +198,17 @@ function enableMouseModeAll(): void {
     console.warn('[mouse-mode] Failed to unbind right-click popup');
   }
 
+  // Enable OSC 52 clipboard: when tmux copies text (drag-select + release),
+  // it sends an OSC 52 escape sequence to xterm.js with the selection encoded
+  // in base64. The frontend's OSC 52 handler decodes it and writes to the
+  // browser clipboard. This makes drag-to-select auto-copy to clipboard.
+  try {
+    execSync(`tmux set -g set-clipboard on`, { stdio: 'ignore' });
+    console.log('[mouse-mode] set-clipboard on (OSC 52 enabled)');
+  } catch {
+    console.warn('[mouse-mode] Failed to set clipboard mode');
+  }
+
   // Also apply to all existing sandbox-* sessions (global only affects new ones)
   try {
     const output = execSync("tmux list-sessions -F '#{session_name}'", {
