@@ -174,6 +174,13 @@ function enableMouseModeAll(): void {
   }
   console.log(`[mouse-mode] global set: ${globalSet ? 'ok' : 'FAILED after 3 attempts'}`);
 
+  try {
+    execSync('tmux set -g history-limit 5000', { stdio: 'ignore' });
+    console.log('[mouse-mode] history-limit set to 5000');
+  } catch {
+    console.warn('[mouse-mode] Failed to set history-limit');
+  }
+
   // Override MouseDragEnd to keep selection visible after mouseup.
   // Default `copy-pipe-and-cancel` exits copy-mode, clearing the highlight.
   // `copy-pipe-no-clear` copies to tmux buffer but stays in copy-mode.

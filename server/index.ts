@@ -17,6 +17,40 @@ const ECHO_MODE = process.env.TERMINAL_MODE === 'echo';
 const SANDBOX_ID = process.env.SANDBOX_ID;
 const WORKER_API_URL = process.env.WORKER_API_URL || 'https://sandbox-launcher.terui.workers.dev';
 
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] Uncaught exception:', err.message, err.stack);
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] Unhandled rejection:', reason);
+});
+
+const MEMORY_CHECK_INTERVAL = 30_000;
+const MEMORY_WARNING_PCT = 80;
+const MEMORY_CRITICAL_PCT = 90;
+
+function getMemoryInfo() {
+  try {
+    const meminfo = readFileSync('/proc/meminfo', 'utf-8');
+    const parse = (key: string) => {
+      const m = meminfo.match(new RegExp(`${key}:\\s+(\\d+)`));
+      return m ? parseInt(m[1], 10) / 1024 : 0;
+    };
+    const totalMB = parse('MemTotal');
+    const availMB = parse('MemAvailable');
+    const swapTotalMB = parse('SwapTotal');
+    const swapFreeMB = parse('SwapFree');
+    const usedMB = totalMB - availMB;
+    const swapUsedMB = swapTotalMB - swapFreeMB;
+    const pool = totalMB + swapTotalMB;
+    const usagePct = pool > 0 ? ((usedMB + swapUsedMB) / pool) * 100 : 0;
+    return { totalMB, usedMB, swapTotalMB, swapUsedMB, usagePct };
+  } catch {
+    return { totalMB: 0, usedMB: 0, swapTotalMB: 0, swapUsedMB: 0, usagePct: 0 };
+  }
+}
+
 // Self-update: check GitHub for new commits on WebSocket connections
 const LOCAL_VERSION_FILE = '/opt/sandboxterminal/.version';
 const PULL_SCRIPT = '/opt/moltshell/pull-app.sh';
@@ -114,7 +148,19 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', mode: ECHO_MODE ? 'echo' : 'pty', sandboxId: SANDBOX_ID || 'not-configured' });
+  const mem = getMemoryInfo();
+  res.json({
+    status: 'ok',
+    mode: ECHO_MODE ? 'echo' : 'pty',
+    sandboxId: SANDBOX_ID || 'not-configured',
+    memory: {
+      totalMB: Math.round(mem.totalMB),
+      usedMB: Math.round(mem.usedMB),
+      swapUsedMB: Math.round(mem.swapUsedMB),
+      usagePct: Math.round(mem.usagePct),
+    },
+    uptime: Math.round(process.uptime()),
+  });
 });
 
 // Layout persistence
@@ -311,4 +357,37 @@ server.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`Mode: ${ECHO_MODE ? 'echo' : 'pty'}`);
   console.log(`WebSocket endpoint: ws://0.0.0.0:${PORT}/ws/terminal`);
   ensureDefaultSession();
+});
+
+let lastAlertLevel: string | null = null;
+let lastAlertTime = 0;
+
+setInterval(() => {
+  const mem = getMemoryInfo();
+  const now = Date.now();
+  let level: 'warning' | 'critical' | null = null;
+  let message = '';
+
+  if (mem.usagePct >= MEMORY_CRITICAL_PCT) {
+    level = 'critical';
+    message = `Memory critically high (${Math.round(mem.usagePct)}%). Processes may be killed.`;
+  } else if (mem.usagePct >= MEMORY_WARNING_PCT) {
+    level = 'warning';
+    message = `Memory usage high (${Math.round(mem.usagePct)}%). Consider closing unused programs.`;
+  }
+
+  if (level && (level !== lastAlertLevel || now - lastAlertTime > 60_000)) {
+    lastAlertLevel = level;
+    lastAlertTime = now;
+    const alert = JSON.stringify({ type: 'system-alert', level, message, timestamp: now });
+    wss.clients.forEach((c) => { if (c.readyState === 1) c.send(alert); });
+  }
+  if (!level) lastAlertLevel = null;
+}, MEMORY_CHECK_INTERVAL);
+
+process.on('SIGTERM', () => {
+  console.log('[shutdown] SIGTERM received, closing server...');
+  wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5000);
 });
