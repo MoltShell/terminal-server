@@ -29,6 +29,7 @@ process.on('unhandledRejection', (reason) => {
 const MEMORY_CHECK_INTERVAL = 30_000;
 const MEMORY_WARNING_PCT = 80;
 const MEMORY_CRITICAL_PCT = 90;
+const WS_PING_INTERVAL = 30_000; // Ping clients every 30s to detect dead connections
 
 function getMemoryInfo() {
   try {
@@ -277,6 +278,10 @@ wss.on('connection', (ws: WebSocket) => {
   const sessionId = (ws as any)._sessionId || 'default';
   console.log(`Client connected (session: ${sessionId})`);
 
+  // Mark connection alive for ping/pong dead-connection detection
+  (ws as any)._isAlive = true;
+  ws.on('pong', () => { (ws as any)._isAlive = true; });
+
   // Check for app updates (non-blocking)
   checkForUpdates().catch(() => {});
 
@@ -358,6 +363,22 @@ server.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`WebSocket endpoint: ws://0.0.0.0:${PORT}/ws/terminal`);
   ensureDefaultSession();
 });
+
+// Ping all clients every 30s to detect dead connections (closed laptop, network drop, etc.)
+// Without this, stale TCP connections persist indefinitely — the heartbeat timer keeps
+// firing on ghost connections, preventing the idle checker from ever suspending the VM.
+const pingInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if ((ws as any)._isAlive === false) {
+      console.log('[ping] Terminating dead WebSocket connection');
+      return ws.terminate();
+    }
+    (ws as any)._isAlive = false;
+    ws.ping();
+  });
+}, WS_PING_INTERVAL);
+
+wss.on('close', () => clearInterval(pingInterval));
 
 let lastAlertLevel: string | null = null;
 let lastAlertTime = 0;
