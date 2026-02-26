@@ -29,7 +29,9 @@ process.on('unhandledRejection', (reason) => {
 const MEMORY_CHECK_INTERVAL = 30_000;
 const MEMORY_WARNING_PCT = 80;
 const MEMORY_CRITICAL_PCT = 90;
-const WS_PING_INTERVAL = 30_000; // Ping clients every 30s to detect dead connections
+const WS_PING_INTERVAL = 30_000; // Protocol-level ping (backup, may be absorbed by proxies)
+const APP_PING_INTERVAL = 30_000; // Application-level ping (JSON data frame, reliable through proxies)
+const APP_PONG_TIMEOUT = 90_000; // If no app-level pong for 90s, consider connection dead
 
 function getMemoryInfo() {
   try {
@@ -278,9 +280,16 @@ wss.on('connection', (ws: WebSocket) => {
   const sessionId = (ws as any)._sessionId || 'default';
   console.log(`Client connected (session: ${sessionId})`);
 
-  // Mark connection alive for ping/pong dead-connection detection
+  // Mark connection alive for protocol-level ping/pong (backup detection)
   (ws as any)._isAlive = true;
   ws.on('pong', () => { (ws as any)._isAlive = true; });
+
+  // Application-level ping/pong tracking (reliable through reverse proxies)
+  // Protocol-level pings may be absorbed by Cloudflare/nginx and never reach the browser.
+  // JSON data frames are always relayed, so this detects dead browsers reliably.
+  // Backward-compatible: only enforce timeout after first pong (old frontends just ignore pings).
+  let lastAppPong = 0;
+  let appPongReceived = false;
 
   // Check for app updates (non-blocking)
   checkForUpdates().catch(() => {});
@@ -300,6 +309,21 @@ wss.on('connection', (ws: WebSocket) => {
       reportActivity();
     }
   }, HEARTBEAT_INTERVAL);
+
+  // Application-level ping: send JSON ping and check for pong timeout
+  const appPingTimer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+
+    // Only enforce timeout after the client has responded at least once
+    // (backward-compatible: old frontends without pong support are unaffected)
+    if (appPongReceived && Date.now() - lastAppPong > APP_PONG_TIMEOUT) {
+      console.log(`[app-ping] No pong for ${APP_PONG_TIMEOUT / 1000}s — terminating connection (session: ${sessionId})`);
+      ws.terminate();
+      return;
+    }
+
+    ws.send(JSON.stringify({ type: 'ping' }));
+  }, APP_PING_INTERVAL);
 
   // Send shell output to client
   pty.onData((data: string) => {
@@ -335,9 +359,14 @@ wss.on('connection', (ws: WebSocket) => {
           killTmuxSession(sessionId);
           ws.close();
           return;
+        case 'pong':
+          // Application-level pong — browser confirmed alive
+          lastAppPong = Date.now();
+          appPongReceived = true;
+          return; // Don't report activity for pong (it's infrastructure, not user action)
       }
 
-      // Report activity on any message
+      // Report activity on any message (except pong above)
       reportActivity();
     } catch (error) {
       console.error('Failed to parse message:', error);
@@ -347,12 +376,14 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('close', () => {
     console.log('Client disconnected');
     clearInterval(heartbeatTimer);
+    clearInterval(appPingTimer);
     pty.kill();
   });
 
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
     clearInterval(heartbeatTimer);
+    clearInterval(appPingTimer);
     pty.kill();
   });
 });
