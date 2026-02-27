@@ -1,12 +1,13 @@
-name: Deploy
+name: CI
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+# Safe for fork PRs — no secrets used, only typecheck
 jobs:
-  deploy:
+  typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

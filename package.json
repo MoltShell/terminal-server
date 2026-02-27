@@ -1,8 +1,13 @@
 {
   "name": "moltshell-terminal-server",
-  "private": true,
   "version": "1.0.0",
+  "description": "WebSocket terminal server with persistent tmux sessions",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MoltShell/terminal-server.git"
+  },
   "scripts": {
     "dev": "tsx watch server/index.ts",
     "start": "tsx server/index.ts",
