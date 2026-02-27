@@ -116,7 +116,7 @@ git push origin main
 
 ### Staging environment
 
-The staging VM (`REDACTED_STAGING_VM`) runs this terminal server. The staging pipeline in `MoltShell/app` resumes the VM, runs Playwright tests against it, and suspends it when done. Changes pushed to `main` here will be picked up by the staging VM on its next boot (when the CI pipeline resumes it).
+The staging pipeline in `MoltShell/app` tests the full stack including this server. Changes pushed to `main` here will be picked up by the staging VM on its next boot (when the CI pipeline resumes it).
 
 ### Agent Protocol: Testing Before Delivery
 
@@ -172,38 +172,15 @@ Routes requests from `/preview/{port}/path` to `localhost:{port}/path` on the VM
 
 **Security**: Blocks privileged ports (<1024) and the terminal server port (3001) to prevent SSRF.
 
-## GCP VM Details
+## VM Runtime Environment
 
-**GCP Project**: `REDACTED_PROJECT`
-**Zone**: `REDACTED_ZONE`
-**Machine type**: `e2-medium` (2 vCPU, 4GB RAM)
-**Disk**: 15GB standard persistent disk (Ubuntu 22.04)
+Each user gets a dedicated GCP VM. This server runs as a systemd service with `Restart=always`.
 
-**Key advantage**: GCP `suspend` saves full RAM to disk. On `resume`, all processes (including tmux sessions) restore exactly. Zero compute billing while suspended (~$0.42/mo disk only).
+**Stack on VM**: Ubuntu 22.04, Node.js 22, tmux, nginx (port 80 → localhost:3001).
 
-**VM Startup Flow**:
-First boot:
-1. Startup script installs Node.js 22, tmux, nginx, tsx, build-essential
-2. Creates `moltshell` user, app dirs, systemd service (with `After=google-startup-scripts.service`)
-3. Writes SANDBOX_ID from GCE metadata
-4. Creates `/opt/moltshell/pull-app.sh` (GitHub download script)
-5. Runs `pull-app.sh` to download code from GitHub + npm install, restarts terminal service
-6. Writes first-boot marker at `/opt/moltshell/.first-boot-done`
+**Key advantage**: GCP `suspend` saves full RAM to disk. On `resume`, all processes (including tmux sessions) restore exactly.
 
-Subsequent boots (after reset/reboot):
-1. Skips package installs (first-boot marker exists)
-2. Writes SANDBOX_ID, updates pull-app.sh
-3. Runs `pull-app.sh` (skips if already up to date) + `systemctl restart moltshell-terminal`
-
-**Nginx**: Runs on port 80, proxies to localhost:3001. Required because Cloudflare Workers' `fetch()` only connects to standard ports.
-
-**IAM Setup**:
-```bash
-# Service account: REDACTED_SA@REDACTED_PROJECT.iam.gserviceaccount.com
-# Roles: REDACTED_ROLE, REDACTED_ROLE
-# Firewall: TCP 3001 from Cloudflare IPs only, tag: terminal-server
-# VMs have NO service account attached — they pull code from the public GitHub repo
-```
+**Nginx**: Required because the upstream proxy only connects to standard ports (80/443).
 
 ## Environment Variables
 
