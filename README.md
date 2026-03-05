@@ -1,5 +1,9 @@
 # MoltShell Terminal Server
 
+> Part of [MoltShell](https://moltshell.sh) -- a browser-based terminal with per-user Linux VMs. This server runs on each VM, providing WebSocket terminal access with persistent tmux sessions.
+>
+> [Docs](https://docs.moltshell.sh) | [App repo](https://github.com/MoltShell/app)
+
 WebSocket terminal server with persistent tmux sessions, built for [MoltShell](https://moltshell.sh).
 
 Runs on Linux VMs and provides browser-based terminal access via xterm.js. Sessions survive disconnects, VM suspend/resume, and browser restarts.
